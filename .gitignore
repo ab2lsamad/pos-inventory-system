@@ -1,0 +1,31 @@
+# Env
+.env
+.env.*
+!.env.example
+
+# Dependencies
+**/node_modules/
+
+# Next.js
+**/.next/
+**/out/
+
+# NestJS
+**/dist/
+**/coverage/
+
+# Logs
+**/*.log
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Docker
+docker-data/
+
+# AI
+CLAUDE.md

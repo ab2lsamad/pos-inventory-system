@@ -1,0 +1,732 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// Enums
+// =========================================================
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+  EMPLOYEE
+}
+
+enum OrderStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  ON_HOLD
+}
+
+enum PaymentMethod {
+  CASH
+  DEBIT_CARD
+  MOBILE_WALLET
+  BANK_TRANSFER
+  OTHER
+}
+
+enum OrderAdjustmentType {
+  RETURN
+  EXCHANGE
+  SALE_ADJUSTMENT
+}
+
+enum OrderAdjustmentStatus {
+  COMPLETED
+  CANCELLED
+}
+
+enum StockMovementType {
+  PURCHASE // received from supplier (with or without PO)
+  SALE // sold to customer
+  RETURN_IN // customer return back to stock
+  RETURN_OUT // supplier return
+  ADJUSTMENT // manual correction (shrink, found, damage)
+  TRANSFER_IN
+  TRANSFER_OUT
+  COUNT // stock take reconciliation
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum TransferStatus {
+  DRAFT
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum DiscountScope {
+  ORDER
+  LINE_ITEM
+}
+
+enum PayoutStatus {
+  DRAFT
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+enum ProductType {
+  SIMPLE
+  VARIABLE
+}
+
+// =========================================================
+// Organization
+// =========================================================
+
+model Store {
+  id             String   @id @default(uuid())
+  name           String
+  code           String   @unique
+  location       String?
+  phone          String?
+  currency       String   @default("PKR") // ISO 4217
+  taxId          String?
+  isActive       Boolean  @default(true)
+  receiptCounter Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  users            User[]
+  orders           Order[]
+  orderAdjustments OrderAdjustment[]
+  inventoryLevels  InventoryLevel[]
+  stockMovements   StockMovement[]
+  purchaseOrders   PurchaseOrder[]
+  transfersFrom    StockTransfer[]   @relation("TransferFromStore")
+  transfersTo      StockTransfer[]   @relation("TransferToStore")
+}
+
+model User {
+  id       String  @id @default(uuid())
+  email    String  @unique
+  password String
+  fullName String?
+  phone    String?
+  role     Role    @default(CASHIER)
+  storeId  String?
+  store    Store?  @relation(fields: [storeId], references: [id])
+  isActive Boolean @default(true)
+
+  // Compensation
+  baseSalary            Decimal   @default(0) @db.Decimal(12, 2)
+  commissionPercent     Decimal   @default(0) @db.Decimal(5, 2)
+  compensationStartDate DateTime?
+  isCompensationEnabled Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders                       Order[]
+  salesOrders                  Order[]                      @relation("OrderSalesperson")
+  orderAdjustments             OrderAdjustment[]
+  salesAdjustments             OrderAdjustment[]            @relation("AdjustmentSalesperson")
+  compensationPayouts          EmployeeCompensationPayout[] @relation("EmployeeCompensationPayoutUser")
+  generatedCompensationPayouts EmployeeCompensationPayout[] @relation("EmployeeCompensationPayoutGeneratedBy")
+  stockMovements               StockMovement[]
+  purchaseOrdersCreated        PurchaseOrder[]              @relation("POCreatedBy")
+  transfersCreated             StockTransfer[]              @relation("TransferCreatedBy")
+}
+
+// =========================================================
+// Catalog
+// =========================================================
+
+model Category {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  code        String     @unique
+  description String?
+  parentId    String?
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  taxRateId   String?
+  taxRate     TaxRate?   @relation(fields: [taxRateId], references: [id])
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  products Product[]
+}
+
+model Brand {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  name        String
+  sku         String      @unique
+  description String?
+  type        ProductType @default(SIMPLE)
+  categoryId  String?
+  category    Category?   @relation(fields: [categoryId], references: [id])
+  brandId     String?
+  brand       Brand?      @relation(fields: [brandId], references: [id])
+  taxRateId   String?
+  taxRate     TaxRate?    @relation(fields: [taxRateId], references: [id])
+  imageUrl    String?
+  isActive    Boolean     @default(true)
+  archivedAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  variants              ProductVariant[]
+  orderItems            OrderItem[]
+  adjustmentReturnItems OrderAdjustmentReturnItem[]
+  adjustmentSaleItems   OrderAdjustmentSaleItem[]
+
+  @@index([categoryId])
+  @@index([brandId])
+}
+
+model ProductVariant {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String // e.g. "Red / Large", "500ml", "Vanilla" — server can auto-compose from attribute values
+  sku       String   @unique
+  barcode   String   @unique
+  price     Decimal  @db.Decimal(12, 2)
+  cost      Decimal  @db.Decimal(12, 2)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attributeValues       VariantAttributeValue[]
+  inventoryLevels       InventoryLevel[]
+  stockMovements        StockMovement[]
+  orderItems            OrderItem[]
+  adjustmentReturnItems OrderAdjustmentReturnItem[]
+  adjustmentSaleItems   OrderAdjustmentSaleItem[]
+  purchaseOrderItems    PurchaseOrderItem[]
+  transferItems         StockTransferItem[]
+  supplierVariants      SupplierProduct[]
+  discountTargets       DiscountVariant[]
+
+  @@unique([productId, name])
+  @@index([productId])
+}
+
+// =========================================================
+// Attributes (normalized, reusable across products/variants)
+// =========================================================
+
+model Attribute {
+  id        String   @id @default(uuid())
+  name      String   @unique // "Size", "Color", "Material"
+  position  Int      @default(0) // display order among attributes
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  values AttributeValue[]
+}
+
+model AttributeValue {
+  id          String    @id @default(uuid())
+  attributeId String
+  attribute   Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  value       String // "S", "M", "L", "Red"
+  position    Int       @default(0) // insertion order; admin can resequence
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  variantLinks VariantAttributeValue[]
+
+  @@unique([attributeId, value])
+  @@index([attributeId])
+}
+
+model VariantAttributeValue {
+  variantId        String
+  attributeValueId String
+  variant          ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  attributeValue   AttributeValue @relation(fields: [attributeValueId], references: [id], onDelete: Restrict)
+
+  @@id([variantId, attributeValueId])
+  @@index([attributeValueId])
+}
+
+// =========================================================
+// Inventory
+// =========================================================
+
+model InventoryLevel {
+  id           String         @id @default(uuid())
+  storeId      String
+  store        Store          @relation(fields: [storeId], references: [id])
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id])
+  quantity     Int            @default(0)
+  reserved     Int            @default(0)
+  reorderPoint Int            @default(0)
+  reorderQty   Int            @default(0)
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([storeId, variantId])
+  @@index([variantId])
+}
+
+model StockMovement {
+  id            String            @id @default(uuid())
+  storeId       String
+  store         Store             @relation(fields: [storeId], references: [id])
+  variantId     String
+  variant       ProductVariant    @relation(fields: [variantId], references: [id])
+  type          StockMovementType
+  quantity      Int // signed: + in, - out
+  unitCost      Decimal?          @db.Decimal(12, 2)
+  referenceType String? // "ORDER" | "ORDER_ADJUSTMENT" | "PURCHASE_ORDER" | "TRANSFER" | "ADJUSTMENT"
+  referenceId   String?
+  userId        String?
+  user          User?             @relation(fields: [userId], references: [id])
+  notes         String?
+  createdAt     DateTime          @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([variantId, createdAt])
+  @@index([referenceType, referenceId])
+}
+
+// =========================================================
+// Customers (minimal, optional on Order)
+// =========================================================
+
+model Customer {
+  id        String   @id @default(uuid())
+  fullName  String
+  phone     String?  @unique
+  email     String?  @unique
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+}
+
+// =========================================================
+// Suppliers & Purchasing (optional usage)
+// =========================================================
+
+model Supplier {
+  id            String   @id @default(uuid())
+  name          String
+  contactPerson String?
+  email         String?
+  phone         String?
+  address       String?
+  taxId         String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  products       SupplierProduct[]
+  purchaseOrders PurchaseOrder[]
+}
+
+model SupplierProduct {
+  id           String         @id @default(uuid())
+  supplierId   String
+  supplier     Supplier       @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  supplierSku  String?
+  costPrice    Decimal        @db.Decimal(12, 2)
+  leadTimeDays Int?
+
+  @@unique([supplierId, variantId])
+  @@index([variantId])
+}
+
+model PurchaseOrder {
+  id           String              @id @default(uuid())
+  poNumber     String              @unique
+  supplierId   String
+  supplier     Supplier            @relation(fields: [supplierId], references: [id])
+  storeId      String
+  store        Store               @relation(fields: [storeId], references: [id])
+  status       PurchaseOrderStatus @default(DRAFT)
+  expectedAt   DateTime?
+  receivedAt   DateTime?
+  subtotal     Decimal             @default(0) @db.Decimal(14, 2)
+  taxTotal     Decimal             @default(0) @db.Decimal(14, 2)
+  shippingCost Decimal             @default(0) @db.Decimal(14, 2)
+  grandTotal   Decimal             @default(0) @db.Decimal(14, 2)
+  currency     String              @default("PKR")
+  notes        String?
+  createdById  String
+  createdBy    User                @relation("POCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  items PurchaseOrderItem[]
+
+  @@index([storeId, createdAt])
+  @@index([supplierId])
+}
+
+model PurchaseOrderItem {
+  id               String         @id @default(uuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  variantId        String
+  variant          ProductVariant @relation(fields: [variantId], references: [id])
+  quantityOrdered  Int
+  quantityReceived Int            @default(0)
+  unitCost         Decimal        @db.Decimal(12, 2)
+  subtotal         Decimal        @db.Decimal(14, 2)
+
+  @@index([purchaseOrderId])
+}
+
+// =========================================================
+// Stock transfers between stores
+// =========================================================
+
+model StockTransfer {
+  id             String         @id @default(uuid())
+  transferNumber String         @unique
+  fromStoreId    String
+  fromStore      Store          @relation("TransferFromStore", fields: [fromStoreId], references: [id])
+  toStoreId      String
+  toStore        Store          @relation("TransferToStore", fields: [toStoreId], references: [id])
+  status         TransferStatus @default(DRAFT)
+  shippedAt      DateTime?
+  receivedAt     DateTime?
+  notes          String?
+  createdById    String
+  createdBy      User           @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items StockTransferItem[]
+
+  @@index([fromStoreId])
+  @@index([toStoreId])
+}
+
+model StockTransferItem {
+  id               String         @id @default(uuid())
+  transferId       String
+  transfer         StockTransfer  @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  variantId        String
+  variant          ProductVariant @relation(fields: [variantId], references: [id])
+  quantity         Int
+  quantityReceived Int            @default(0)
+
+  @@index([transferId])
+}
+
+// =========================================================
+// Taxes & Discounts
+// =========================================================
+
+model TaxRate {
+  id          String   @id @default(uuid())
+  name        String   @unique // e.g. "GST 17%"
+  rate        Decimal  @db.Decimal(5, 2) // percent
+  isInclusive Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products   Product[]
+  categories Category[]
+}
+
+model Discount {
+  id          String        @id @default(uuid())
+  name        String
+  code        String?       @unique // coupon code (null if not a coupon)
+  type        DiscountType
+  scope       DiscountScope
+  value       Decimal       @db.Decimal(12, 2) // percent OR fixed amount
+  minSubtotal Decimal?      @db.Decimal(12, 2)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  usageLimit  Int?
+  usageCount  Int           @default(0)
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  orderDiscounts     OrderDiscount[]
+  orderItemDiscounts OrderItemDiscount[]
+  adjustmentSaleItemDiscounts OrderAdjustmentSaleItemDiscount[]
+
+  // LINE_ITEM scope only: the variants this discount may be applied to. An
+  // empty set means the discount is unrestricted (applies to any variant).
+  targetVariants DiscountVariant[]
+}
+
+// Join table pinning a LINE_ITEM discount to specific product variants (SKUs).
+model DiscountVariant {
+  discountId String
+  discount   Discount       @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  variantId  String
+  variant    ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@id([discountId, variantId])
+  @@index([variantId])
+}
+
+// =========================================================
+// Orders
+// =========================================================
+
+model Order {
+  id            String    @id @default(uuid())
+  receiptNumber Int // per-store sequential
+  storeId       String
+  store         Store     @relation(fields: [storeId], references: [id])
+  cashierId     String
+  cashier       User      @relation(fields: [cashierId], references: [id])
+  salespersonId String?
+  salesperson   User?     @relation("OrderSalesperson", fields: [salespersonId], references: [id])
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+
+  status        OrderStatus   @default(PENDING)
+  paymentMethod PaymentMethod @default(CASH)
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  discountTotal Decimal @default(0) @db.Decimal(14, 2)
+  taxTotal      Decimal @default(0) @db.Decimal(14, 2)
+  grandTotal    Decimal @db.Decimal(14, 2)
+  amountPaid    Decimal @default(0) @db.Decimal(14, 2) // what the customer paid (cash tendered, card amount, transfer received)
+  changeGiven   Decimal @default(0) @db.Decimal(14, 2) // change returned (0 for non-cash)
+  refundedTotal Decimal @default(0) @db.Decimal(14, 2)
+  currency      String  @default("PKR")
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items       OrderItem[]
+  discounts   OrderDiscount[]
+  adjustments OrderAdjustment[]
+
+  @@unique([storeId, receiptNumber])
+  @@index([storeId, createdAt])
+  @@index([cashierId, createdAt])
+  @@index([salespersonId, createdAt])
+  @@index([customerId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String         @id @default(uuid())
+  orderId   String
+  order     Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product        @relation(fields: [productId], references: [id])
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+
+  quantity         Int
+  unitPrice        Decimal @db.Decimal(12, 2)
+  unitCostSnapshot Decimal @db.Decimal(12, 2)
+  discountAmount   Decimal @default(0) @db.Decimal(12, 2)
+  taxAmount        Decimal @default(0) @db.Decimal(12, 2)
+  subtotal         Decimal @db.Decimal(14, 2) // post-discount, pre-tax
+  total            Decimal @db.Decimal(14, 2) // post-discount, post-tax
+
+  productNameSnapshot    String
+  variantNameSnapshot    String
+  variantSkuSnapshot     String
+  variantBarcodeSnapshot String?
+
+  createdAt DateTime @default(now())
+
+  itemDiscounts         OrderItemDiscount[]
+  adjustmentReturnItems OrderAdjustmentReturnItem[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+}
+
+model OrderDiscount {
+  id          String    @id @default(uuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  discountId  String?
+  discount    Discount? @relation(fields: [discountId], references: [id])
+  description String
+  amount      Decimal   @db.Decimal(12, 2)
+  createdAt   DateTime  @default(now())
+
+  @@index([orderId])
+}
+
+model OrderItemDiscount {
+  id          String    @id @default(uuid())
+  orderItemId String
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  discountId  String?
+  discount    Discount? @relation(fields: [discountId], references: [id])
+  description String
+  amount      Decimal   @db.Decimal(12, 2)
+  createdAt   DateTime  @default(now())
+
+  @@index([orderItemId])
+}
+
+// =========================================================
+// Returns / Exchanges / Sale Adjustments
+// =========================================================
+
+model OrderAdjustment {
+  id                     String                @id @default(uuid())
+  originalOrderId        String
+  originalOrder          Order                 @relation(fields: [originalOrderId], references: [id])
+  storeId                String
+  store                  Store                 @relation(fields: [storeId], references: [id])
+  cashierId              String
+  cashier                User                  @relation(fields: [cashierId], references: [id])
+  salespersonId          String?
+  salesperson            User?                 @relation("AdjustmentSalesperson", fields: [salespersonId], references: [id])
+  type                   OrderAdjustmentType
+  status                 OrderAdjustmentStatus @default(COMPLETED)
+  paymentMethod          PaymentMethod         @default(CASH)
+  refundAmount           Decimal               @default(0) @db.Decimal(14, 2)
+  additionalChargeAmount Decimal               @default(0) @db.Decimal(14, 2)
+  netAmount              Decimal               @db.Decimal(14, 2)
+  amountPaid             Decimal?              @db.Decimal(14, 2) // tender received from customer (e.g. cash handed for additional charge); null for pure refunds
+  changeGiven            Decimal?              @db.Decimal(14, 2) // change returned to customer (0 for non-cash)
+  notes                  String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  returnItems OrderAdjustmentReturnItem[]
+  saleItems   OrderAdjustmentSaleItem[]
+
+  @@index([originalOrderId])
+  @@index([storeId, createdAt])
+  @@index([cashierId])
+  @@index([salespersonId, createdAt])
+}
+
+model OrderAdjustmentReturnItem {
+  id                     String          @id @default(uuid())
+  adjustmentId           String
+  adjustment             OrderAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  orderItemId            String
+  orderItem              OrderItem       @relation(fields: [orderItemId], references: [id])
+  productId              String
+  product                Product         @relation(fields: [productId], references: [id])
+  variantId              String
+  variant                ProductVariant  @relation(fields: [variantId], references: [id])
+  quantity               Int
+  unitPrice              Decimal         @db.Decimal(12, 2)
+  subtotal               Decimal         @db.Decimal(14, 2)
+  restock                Boolean         @default(true)
+  productNameSnapshot    String?
+  variantNameSnapshot    String?
+  variantSkuSnapshot     String?
+  variantBarcodeSnapshot String?
+  createdAt              DateTime        @default(now())
+
+  @@index([adjustmentId])
+  @@index([orderItemId])
+}
+
+model OrderAdjustmentSaleItem {
+  id                     String          @id @default(uuid())
+  adjustmentId           String
+  adjustment             OrderAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  productId              String
+  product                Product         @relation(fields: [productId], references: [id])
+  variantId              String
+  variant                ProductVariant  @relation(fields: [variantId], references: [id])
+  quantity               Int
+  unitPrice              Decimal         @db.Decimal(12, 2)
+  unitCostSnapshot       Decimal         @db.Decimal(12, 2)
+  discountAmount         Decimal         @default(0) @db.Decimal(12, 2)
+  taxAmount              Decimal         @default(0) @db.Decimal(12, 2)
+  subtotal               Decimal         @db.Decimal(14, 2) // post-discount, pre-tax
+  total                  Decimal         @default(0) @db.Decimal(14, 2) // post-discount, post-tax
+  productNameSnapshot    String?
+  variantNameSnapshot    String?
+  variantSkuSnapshot     String?
+  variantBarcodeSnapshot String?
+  createdAt              DateTime        @default(now())
+
+  itemDiscounts OrderAdjustmentSaleItemDiscount[]
+
+  @@index([adjustmentId])
+}
+
+model OrderAdjustmentSaleItemDiscount {
+  id                       String                  @id @default(uuid())
+  adjustmentSaleItemId     String
+  adjustmentSaleItem       OrderAdjustmentSaleItem @relation(fields: [adjustmentSaleItemId], references: [id], onDelete: Cascade)
+  discountId               String?
+  discount                 Discount?               @relation(fields: [discountId], references: [id])
+  description              String
+  amount                   Decimal                 @db.Decimal(12, 2)
+  createdAt                DateTime                @default(now())
+
+  @@index([adjustmentSaleItemId])
+}
+
+// =========================================================
+// Compensation
+// =========================================================
+
+model EmployeeCompensationPayout {
+  id                        String       @id @default(uuid())
+  userId                    String
+  user                      User         @relation("EmployeeCompensationPayoutUser", fields: [userId], references: [id])
+  periodStart               DateTime
+  periodEnd                 DateTime
+  baseSalaryAmount          Decimal      @db.Decimal(12, 2)
+  commissionPercentSnapshot Decimal      @db.Decimal(5, 2)
+  commissionableSalesAmount Decimal      @db.Decimal(14, 2)
+  commissionAmount          Decimal      @db.Decimal(12, 2)
+  adjustmentAmount          Decimal      @default(0) @db.Decimal(12, 2)
+  totalPayableAmount        Decimal      @db.Decimal(14, 2)
+  status                    PayoutStatus @default(DRAFT)
+  paidAt                    DateTime?
+  notes                     String?
+  generatedById             String?
+  generatedBy               User?        @relation("EmployeeCompensationPayoutGeneratedBy", fields: [generatedById], references: [id])
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  @@index([userId, periodStart, periodEnd])
+  @@index([generatedById])
+  @@index([status])
+}
