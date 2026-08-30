@@ -341,3 +341,11 @@ Roles come from the Prisma `Role` enum: `ADMIN`, `MANAGER`, `CASHIER`, `EMPLOYEE
 | `CASHIER`  | POS terminal, orders, customers, and read access to catalog/inventory       |
 | `EMPLOYEE` | Sales-floor staff credited as **salesperson** on orders; earns base salary + commission. Not a back-office UI role |
 | `MANAGER`  | **Deprecated** — hidden for new users but still honored for existing accounts (catalog/inventory management, dashboard) |
+
+## License
+
+Copyright (c) 2026 Abdul Samad. All rights reserved. 
+
+This project is strictly for portfolio demonstration purposes. 
+No part of this project may be copied, modified, or distributed 
+without explicit written permission from the author.
